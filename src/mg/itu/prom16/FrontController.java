@@ -268,7 +268,6 @@ public class FrontController extends HttpServlet {
                         args[i] = convertParameterValue(req.getParameter(parameters[i].getName()), parameterTypes[i]);
                     }
                 }
-            }
 
             // Vérifier s'il y a des arguments non résolus et non annotés
             for (int i = 0; i < args.length; i++) {

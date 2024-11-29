@@ -139,7 +139,7 @@ public class FrontController extends HttpServlet {
                         }
                         req.getRequestDispatcher(modelView.getUrl()).forward(req, resp);
                     } else {
-                        exceptions.add(new Exception("Type de retour non reconnu : " + result.getClass().getName()));
+                        exceptions.add(new Exception("Type de retour not found : " + result.getClass().getName()));
                     }
                 }
             } catch (Exception e) {

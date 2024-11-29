@@ -3,6 +3,8 @@ package mg.itu.prom16;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
@@ -146,41 +148,91 @@ public class FrontController extends HttpServlet {
 
     private Object invokeMethod(HttpServletRequest req, String className, Method method)
             throws IOException, NoSuchMethodException {
-        Object returnValue = null;
+        Object result = null;
         try {
             Class<?> clazz = Class.forName(className);
             method.setAccessible(true);
 
-            Parameter[] methodParams = method.getParameters();
-            Object[] args = new Object[methodParams.length];
+            Object[] args = new Object[method.getParameterCount()];
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+            Parameter[] parameters = method.getParameters();
 
-            Enumeration<String> params = req.getParameterNames();
-            Map<String, String> paramMap = new HashMap<>();
+            Map<Integer, String> paramIndexToNameMap = new HashMap<>();
+            for (int i = 0; i < parameters.length; i++) {
+                paramIndexToNameMap.put(i, parameters[i].getName());
+            }
 
-            while (params.hasMoreElements()) {
-                String paramName = params.nextElement();
-                paramMap.put(paramName, req.getParameter(paramName));
-            }
-            for (int i = 0; i < methodParams.length; i++) {
-                args[i] = null;
-                if (methodParams[i].isAnnotationPresent(Param.class)) {
-                    String paramName = methodParams[i].getAnnotation(Param.class).name();
-                    String paramValue = paramMap.get(paramName);
-                    args[i] = paramValue;
+            Enumeration<String> parameterNames = req.getParameterNames();
+            while (parameterNames.hasMoreElements()) {
+                String paramName = parameterNames.nextElement();
+                String paramValue = req.getParameter(paramName);
+                boolean paramResolved = false;
+
+                // Vérifier d'abord par le nom de la variable de méthode
+                for (int i = 0; i < parameterTypes.length; i++) {
+                    if (paramName.equals(paramIndexToNameMap.get(i))) {
+                        args[i] = convertParameterValue(paramValue, parameterTypes[i]);
+                        paramResolved = true;
+                        continue;
+                    }
                 }
-                if (!methodParams[i].isAnnotationPresent(Param.class)) {
-                    String paramName = methodParams[i].getName();
-                    String paramValue = req.getParameter(paramName);
-                    args[i] = paramValue;
+
+                // Si le paramètre n'est pas résolu via le nom de variable, vérifier les
+                // annotations
+                if (!paramResolved) {
+                    for (int i = 0; i < parameterAnnotations.length; i++) {
+                        Annotation[] annotations = parameterAnnotations[i];
+                        for (Annotation annotation : annotations) {
+                            if (annotation instanceof Param) {
+                                String annotationValue = ((Param) annotation).name();
+                                if (paramName.equals(annotationValue)) {
+                                    args[i] = convertParameterValue(paramValue, parameterTypes[i]);
+                                    paramResolved = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (paramResolved) {
+                            break;
+                        }
+                    }
                 }
             }
+
+            for (int i = 0; i < parameterTypes.length; i++) {
+                if (args[i] == null) {
+                    if (parameters[i].isAnnotationPresent(RequestObject.class)) {
+                        RequestObject requestObjectAnnotation = parameters[i].getAnnotation(RequestObject.class);
+                        String prefix = requestObjectAnnotation.value();
+                        args[i] = populateObjectFromRequest(parameterTypes[i], req, prefix);
+                    } else if (req.getParameter(parameters[i].getName()) != null) {
+                        args[i] = convertParameterValue(req.getParameter(parameters[i].getName()), parameterTypes[i]);
+                    }
+                }
+            }
+
+            // Vérifier s'il y a des arguments non résolus et non annotés
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] == null &&
+                        !parameters[i].isAnnotationPresent(Param.class) &&
+                        !parameters[i].isAnnotationPresent(RequestObject.class)) {
+                    throw new Exception("ETU2677: Parameter " + parameters[i].getName() +
+                            " in method " + method.getName() +
+                            " of class " + className +
+                            " is not annotated by @Param or @RequestObject");
+                }
+            }
+
             Object instance = clazz.getDeclaredConstructor().newInstance();
-            returnValue = method.invoke(instance, args);
+            result = method.invoke(instance, args);
 
         } catch (Exception e) {
             e.printStackTrace();
+            throw new IOException(e); // Propager l'exception pour être traitée ailleurs
         }
-        return returnValue;
+
+        return result;
     }
 
     private void displayError(HttpServletResponse resp, Exception e) throws IOException {
@@ -213,6 +265,42 @@ public class FrontController extends HttpServlet {
             }
         }
         return null;
+    }
+
+    private Object convertParameterValue(String paramValue, Class<?> parameterType) {
+        if (parameterType == String.class) {
+            return paramValue;
+        } else if (parameterType == int.class || parameterType == Integer.class) {
+            return Integer.parseInt(paramValue);
+        } else if (parameterType == double.class || parameterType == Double.class) {
+            return Double.parseDouble(paramValue);
+        } else if (parameterType == boolean.class || parameterType == Boolean.class) {
+            return Boolean.parseBoolean(paramValue);
+        } else {
+            // Gérer d'autres types de paramètres selon les besoins
+            return paramValue;
+        }
+    }
+
+    private Object populateObjectFromRequest(Class<?> objectType, HttpServletRequest req, String prefix)
+            throws Exception {
+        Object obj = objectType.getDeclaredConstructor().newInstance();
+        Field[] fields = objectType.getDeclaredFields();
+
+        for (Field field : fields) {
+            field.setAccessible(true);
+            String paramName = (prefix.isEmpty() ? "" : prefix + ".") + field.getName();
+            if (field.isAnnotationPresent(RequestField.class)) {
+                RequestField requestField = field.getAnnotation(RequestField.class);
+                paramName = prefix + "." + requestField.value();
+            }
+            String paramValue = req.getParameter(paramName);
+            if (paramValue != null) {
+                field.set(obj, convertParameterValue(paramValue, field.getType()));
+            }
+        }
+
+        return obj;
     }
 
     @Override

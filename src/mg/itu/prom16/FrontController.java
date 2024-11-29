@@ -4,13 +4,16 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Map;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.util.Enumeration;
 import mg.itu.prom16.Annotations.*;
 
 public class FrontController extends HttpServlet {
@@ -104,10 +107,11 @@ public class FrontController extends HttpServlet {
             }
 
             resp.setContentType("text/html;charset=UTF-8");
+            out.println("Class Name: " + mapping.getClassName() + "</li>");
+            out.println("Method Name: " + mapping.getMethodName() + "</li>");
             Class<?> clazz = Class.forName(mapping.getClassName());
-            Object instance = clazz.getDeclaredConstructor().newInstance();
-            Method method = clazz.getDeclaredMethod(mapping.getMethodName());
-            Object result = method.invoke(instance);
+            Method method = getMethodByName(clazz, mapping.getMethodName());
+            Object result = invokeMethod(req, mapping.getClassName(), method);
 
             if (result instanceof String) {
                 out.println("<!DOCTYPE html>");
@@ -140,6 +144,45 @@ public class FrontController extends HttpServlet {
         }
     }
 
+    private Object invokeMethod(HttpServletRequest req, String className, Method method)
+            throws IOException, NoSuchMethodException {
+        Object returnValue = null;
+        try {
+            Class<?> clazz = Class.forName(className);
+            method.setAccessible(true);
+
+            Parameter[] methodParams = method.getParameters();
+            Object[] args = new Object[methodParams.length];
+
+            Enumeration<String> params = req.getParameterNames();
+            Map<String, String> paramMap = new HashMap<>();
+
+            while (params.hasMoreElements()) {
+                String paramName = params.nextElement();
+                paramMap.put(paramName, req.getParameter(paramName));
+            }
+            for (int i = 0; i < methodParams.length; i++) {
+                args[i] = null;
+                if (methodParams[i].isAnnotationPresent(Param.class)) {
+                    String paramName = methodParams[i].getAnnotation(Param.class).name();
+                    String paramValue = paramMap.get(paramName);
+                    args[i] = paramValue;
+                }
+                if (!methodParams[i].isAnnotationPresent(Param.class)) {
+                    String paramName = methodParams[i].getName();
+                    String paramValue = req.getParameter(paramName);
+                    args[i] = paramValue;
+                }
+            }
+            Object instance = clazz.getDeclaredConstructor().newInstance();
+            returnValue = method.invoke(instance, args);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return returnValue;
+    }
+
     private void displayError(HttpServletResponse resp, Exception e) throws IOException {
         PrintWriter out = resp.getWriter();
         resp.setContentType("text/html;charset=UTF-8");
@@ -155,6 +198,21 @@ public class FrontController extends HttpServlet {
         }
         out.println("</body>");
         out.println("</html>");
+    }
+
+    public Method getMethodByName(Class<?> clazz, String methodName) {
+        Method[] methods = clazz.getDeclaredMethods();
+        for (Method m : methods) {
+            if (m.getName().equals(methodName)) {
+                try {
+                    Class<?>[] parameterTypes = m.getParameterTypes();
+                    return clazz.getMethod(methodName, parameterTypes);
+                } catch (NoSuchMethodException ex) {
+                    ex.printStackTrace();
+                }
+            }
+        }
+        return null;
     }
 
     @Override

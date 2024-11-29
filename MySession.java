@@ -1,7 +1,5 @@
 package mg.itu.prom16;
 
-import jakarta.servlet.http.HttpSession;
-
 public class MySession {
     private HttpSession session;
 

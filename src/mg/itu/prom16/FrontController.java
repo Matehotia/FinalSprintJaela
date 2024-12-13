@@ -202,97 +202,123 @@ public class FrontController extends HttpServlet {
     }
 
     private Object invokeMethod(HttpServletRequest req, String className, Method method)
-            throws IOException, NoSuchMethodException {
-        Object result = null;
-        try {
-            Class<?> clazz = Class.forName(className);
-            method.setAccessible(true);
+        throws IOException, NoSuchMethodException {
+    Object result = null;
+    try {
+        Class<?> clazz = Class.forName(className);
+        method.setAccessible(true);
 
-            Object[] args = new Object[method.getParameterCount()];
-            Class<?>[] parameterTypes = method.getParameterTypes();
-            Annotation[][] parameterAnnotations = method.getParameterAnnotations();
-            Parameter[] parameters = method.getParameters();
+        Object[] args = new Object[method.getParameterCount()];
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+        Parameter[] parameters = method.getParameters();
 
-            Map<Integer, String> paramIndexToNameMap = new HashMap<>();
-            for (int i = 0; i < parameters.length; i++) {
-                paramIndexToNameMap.put(i, parameters[i].getName());
-            }
+        boolean fileParamFound = false; // Indicateur pour savoir si un FileParam a été traité
 
-            Enumeration<String> parameterNames = req.getParameterNames();
-            while (parameterNames.hasMoreElements()) {
-                String paramName = parameterNames.nextElement();
-                String paramValue = req.getParameter(paramName);
-                boolean paramResolved = false;
+        for (int i = 0; i < parameters.length; i++) {
+            Parameter param = parameters[i];
+            Class<?> paramType = parameterTypes[i];
+            Annotation[] anns = parameterAnnotations[i];
 
-                // Vérifier d'abord par le nom de la variable de méthode
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    if (paramName.equals(paramIndexToNameMap.get(i))) {
-                        args[i] = convertParameterValue(paramValue, parameterTypes[i]);
-                        paramResolved = true;
-                        continue;
-                    }
-                }
+            String paramName = null;
+            boolean isFileParam = false;
+            boolean isRequestObject = false;
 
-                // Si le paramètre n'est pas résolu via le nom de variable, vérifier les annotations
-                if (!paramResolved) {
-                    for (int i = 0; i < parameterAnnotations.length; i++) {
-                        Annotation[] annotations = parameterAnnotations[i];
-                        for (Annotation annotation : annotations) {
-                            if (annotation instanceof Param) {
-                                String annotationValue = ((Param) annotation).name();
-                                if (paramName.equals(annotationValue)) {
-                                    args[i] = convertParameterValue(paramValue, parameterTypes[i]);
-                                    paramResolved = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (paramResolved) {
-                            break;
-                        }
+            // Analyse des annotations du paramètre
+            for (Annotation ann : anns) {
+                if (ann instanceof FileParamName) {
+                    // Assurez-vous que @FileParamName utilise "value()" et non "name()"
+                    paramName = ((FileParamName) ann).value();
+                    isFileParam = (paramType == FileParam.class);
+                } else if (ann instanceof RequestObject) {
+                    isRequestObject = true;
+                } else if (ann instanceof Param) {
+                    if (paramName == null) {
+                        paramName = ((Param) ann).name();
                     }
                 }
             }
 
-            // Gérer les paramètres de type MySession
-            for (int i = 0; i < parameterTypes.length; i++) {
-                if (args[i] == null) {
-                    if (parameters[i].getType().equals(MySession.class)) {
-                        HttpSession session = req.getSession();
-                        args[i] = new MySession(session);
-                    } else if (parameters[i].isAnnotationPresent(RequestObject.class)) {
-                        RequestObject requestObjectAnnotation = parameters[i].getAnnotation(RequestObject.class);
-                        String prefix = requestObjectAnnotation.value();
-                        args[i] = populateObjectFromRequest(parameterTypes[i], req, prefix);
-                    } else if (req.getParameter(parameters[i].getName()) != null) {
-                        args[i] = convertParameterValue(req.getParameter(parameters[i].getName()), parameterTypes[i]);
-                    }
-                }
+            System.out.println("Param: " + param.getName() + ", type: " + paramType.getName() + ", paramName: " + paramName);
+
+            // Gestion MySession
+            if (paramType == MySession.class) {
+                HttpSession session = req.getSession();
+                args[i] = new MySession(session);
+                continue;
             }
 
-            // Vérifier s'il y a des arguments non résolus et non annotés
-            for (int i = 0; i < args.length; i++) {
-                if (args[i] == null &&
-                        !parameters[i].isAnnotationPresent(Param.class) &&
-                        !parameters[i].isAnnotationPresent(RequestObject.class)) {
-                    throw new Exception("ETU2456: Parameter " + parameters[i].getName() +
-                            " in method " + method.getName() +
-                            " of class " + className +
-                            " is not annotated by @Param or @RequestObject");
+            // Gestion FileParam
+            if (isFileParam) {
+                if (paramName == null || paramName.isEmpty()) {
+                    throw new Exception("FileParam parameter missing @FileParamName annotation or value is empty.");
                 }
+                System.out.println("Traitement FileParam pour " + paramName);
+
+                FileParam fileParam = new FileParam(paramName);
+                System.out.println("ParamName pour FileParam: " + paramName);
+                System.out.println("request.getContentType(): " + req.getContentType());
+                System.out.println("Liste des parts:");
+                for (Part p : req.getParts()) {
+                    System.out.println("Part name: " + p.getName() + ", SubmittedFileName: " + p.getSubmittedFileName());
+                }
+
+                fileParam.load(req); // charge le fichier
+                args[i] = fileParam;
+                fileParamFound = true;
+                continue;
             }
 
-            Object instance = clazz.getDeclaredConstructor().newInstance();
-            result = method.invoke(instance, args);
+            // Gestion RequestObject
+            if (isRequestObject) {
+                RequestObject requestObjectAnnotation = param.getAnnotation(RequestObject.class);
+                String prefix = (requestObjectAnnotation != null) ? requestObjectAnnotation.value() : "";
+                args[i] = populateObjectFromRequest(paramType, req, prefix);
+                continue;
+            }
 
-        } catch (Exception e) {
-            e.printStackTrace();
-            e.getCause();
-            throw new IOException(e);
+            // Paramètres simples
+            if (paramName == null) {
+                paramName = param.getName();
+            }
+
+            String paramValue = req.getParameter(paramName);
+            args[i] = convertParameterValue(paramValue, paramType);
         }
 
-        return result;
+        // Vérification finale des paramètres non résolus
+        for (int i = 0; i < args.length; i++) {
+            if (args[i] == null &&
+                    !parameters[i].isAnnotationPresent(Param.class) &&
+                    !parameters[i].isAnnotationPresent(RequestObject.class) &&
+                    !parameters[i].isAnnotationPresent(FileParamName.class) &&
+                    !(parameterTypes[i] == MySession.class)) {
+                throw new Exception("ETU2456: Parameter " + parameters[i].getName() +
+                        " in method " + method.getName() +
+                        " of class " + className +
+                        " is not annotated by @Param, @FileParamName, @RequestObject, or is not MySession");
+            }
+        }
+
+        // Si un FileParam a été traité, on ne lance pas la méthode du contrôleur,
+        // on retourne "File upload successful"
+        if (fileParamFound) {
+            return "File upload successful";
+        }
+
+        // Sinon, invocation de la méthode comme d'habitude
+        Object instance = clazz.getDeclaredConstructor().newInstance();
+        result = method.invoke(instance, args);
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        e.getCause();
+        throw new IOException(e);
     }
+
+    return result;
+}
+
 
     private void displayError(HttpServletResponse resp, Exception e) throws IOException {
         PrintWriter out = resp.getWriter();

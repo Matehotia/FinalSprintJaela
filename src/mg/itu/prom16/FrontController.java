@@ -293,7 +293,7 @@ public class FrontController extends HttpServlet {
                     !parameters[i].isAnnotationPresent(RequestObject.class) &&
                     !parameters[i].isAnnotationPresent(FileParamName.class) &&
                     !(parameterTypes[i] == MySession.class)) {
-                throw new Exception("ETU2456: Parameter " + parameters[i].getName() +
+                throw new Exception("ETU2677: Parameter " + parameters[i].getName() +
                         " in method " + method.getName() +
                         " of class " + className +
                         " is not annotated by @Param, @FileParamName, @RequestObject, or is not MySession");

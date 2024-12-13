@@ -8,19 +8,22 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.google.gson.*;
+import com.google.gson.Gson;
 
 import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.Part;
+
 import mg.itu.prom16.Annotations.*;
 
+@WebServlet(name = "FrontController", urlPatterns = { "/" })
 public class FrontController extends HttpServlet {
     private HashMap<String, Mapping> urlMappings = new HashMap<>();
     protected ArrayList<String> listeControlleurs = new ArrayList<>();
@@ -38,7 +41,6 @@ public class FrontController extends HttpServlet {
             throw new Exception("Package directory does not exist: " + bin_path);
         }
 
-        // Verifie dans le package si les controlleurs existent
         boolean hasController = false;
 
         for (File fichier : b.listFiles()) {
@@ -51,7 +53,7 @@ public class FrontController extends HttpServlet {
                     for (Method method : classe.getDeclaredMethods()) {
                         String url = null;
                         String verb = "GET";
-                        
+
                         if (method.isAnnotationPresent(Url.class)) {
                             Url urlAnnotation = method.getAnnotation(Url.class);
                             url = urlAnnotation.value();
@@ -67,17 +69,10 @@ public class FrontController extends HttpServlet {
                                 urlMappings.put(url, mapping);
                             }
 
-                            try {
-                                Class<?>[] paramTypes = method.getParameterTypes();
-                                VerbAction verbAction = new VerbAction(method.getName(), verb, paramTypes);
-                                
-                                // Vérification s'il existe déjà un VerbAction avec le même verbe et action
-                                mapping.addVerbAction(verbAction);
-                                urlMappings.put(url, mapping);
-    
-                            } catch (Exception e) {
-                                throw e;
-                            }
+                            Class<?>[] paramTypes = method.getParameterTypes();
+                            VerbAction verbAction = new VerbAction(method.getName(), verb, paramTypes);
+                            mapping.addVerbAction(verbAction);
+                            urlMappings.put(url, mapping);
                         }
                     }
                 }
@@ -92,8 +87,6 @@ public class FrontController extends HttpServlet {
     @Override
     public void init() throws ServletException {
         super.init();
-        // Defer the package initialization to the first request to display custom
-        // errors
     }
 
     protected void processRequest(HttpServletRequest req, HttpServletResponse resp)
@@ -103,7 +96,6 @@ public class FrontController extends HttpServlet {
         PrintWriter out = resp.getWriter();
 
         try {
-            // Initialisation des contrôleurs si nécessaire
             if (urlMappings.isEmpty()) {
                 try {
                     getListeControlleurs(getServletContext().getInitParameter("controllerPackage"));
@@ -115,7 +107,6 @@ public class FrontController extends HttpServlet {
                 }
             }
 
-            // Si aucune URL fournie, afficher un message de bienvenue
             if (urlPath == null || urlPath.isEmpty() || urlPath.equals("/")) {
                 req.getRequestDispatcher("index.jsp").forward(req, resp);
                 return;
@@ -123,7 +114,6 @@ public class FrontController extends HttpServlet {
 
             Mapping mapping = urlMappings.get(urlPath);
             if (mapping == null) {
-                // URL not found, respond with 400 error
                 resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                 out.println("<html><body>");
                 out.println("<h1>400 Bad Request</h1>");
@@ -132,43 +122,28 @@ public class FrontController extends HttpServlet {
                 return;
             }
 
-            // Vérification du verbe HTTP
             String requestMethod = req.getMethod();
             VerbAction verbAction = mapping.getVerbAction(requestMethod);
             if (verbAction == null) {
-                if (verbAction == null) {
-                    // Si le verbe HTTP est incorrect, renvoyer une erreur 405
-                    resp.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
-                    out.println("<html><body>");
-                    out.println("<h1>405 Method Not Allowed</h1>");
-                    out.println("<p>Verb " + requestMethod + " is not allowed for the URL " + urlPath + ".</p>");
-                    out.println("<p>Use " + mapping.getAvailableVerbs() + " instead.</p>");
-                    out.println("</body></html>");
-                    return;
-                }
+                resp.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+                out.println("<html><body>");
+                out.println("<h1>405 Method Not Allowed</h1>");
+                out.println("<p>Verb " + requestMethod + " is not allowed for the URL " + urlPath + ".</p>");
+                out.println("<p>Use " + mapping.getAvailableVerbs() + " instead.</p>");
+                out.println("</body></html>");
+                return;
             }
 
             Class<?> clazz = Class.forName(mapping.getClassName());
             Method method = getMethodByName(clazz, verbAction.getAction(), verbAction.getParameterTypes());
             Object result = invokeMethod(req, mapping.getClassName(), method);
 
-            // Vérifier si la méthode est annotée avec @Restapi
             if (method.isAnnotationPresent(Restapi.class)) {
                 resp.setContentType("application/json;charset=UTF-8");
-                // Utilisation de Gson pour convertir en JSON
                 Gson gson = new Gson();
-                String jsonResponse;
-                if (result instanceof ModelView) {
-                    // Si c'est un ModelView, renvoyer les données
-                    ModelView modelView = (ModelView) result;
-                    jsonResponse = gson.toJson(modelView.getData());
-                } else {
-                    // Sinon, transformer directement le résultat en JSON
-                    jsonResponse = gson.toJson(result);
-                }
+                String jsonResponse = gson.toJson(result);
                 out.print(jsonResponse);
             } else {
-                // Traitement normal avec retour d'une vue (JSP)
                 if (result instanceof String) {
                     out.println("<!DOCTYPE html>");
                     out.println("<html>");
@@ -177,11 +152,6 @@ public class FrontController extends HttpServlet {
                     out.println("</head>");
                     out.println("<body>");
                     out.println("<h1>Information for URL: " + urlPath + "</h1>");
-                    out.println("<ul>");
-                    out.println("<li>Class Name: " + mapping.getClassName() + "</li>");
-                    out.println("<li>Method Name: " + verbAction.getAction() + "</li>");
-                    out.println("<li>Message du méthode: " + result + "</li>");
-                    out.println("</ul>");
                     out.println("</body>");
                     out.println("</html>");
                 } else if (result instanceof ModelView) {
@@ -202,7 +172,7 @@ public class FrontController extends HttpServlet {
     }
 
     private Object invokeMethod(HttpServletRequest req, String className, Method method)
-            throws IOException, NoSuchMethodException {
+            throws IOException {
         Object result = null;
         try {
             Class<?> clazz = Class.forName(className);
@@ -210,83 +180,33 @@ public class FrontController extends HttpServlet {
 
             Object[] args = new Object[method.getParameterCount()];
             Class<?>[] parameterTypes = method.getParameterTypes();
-            Annotation[][] parameterAnnotations = method.getParameterAnnotations();
             Parameter[] parameters = method.getParameters();
 
-            Map<Integer, String> paramIndexToNameMap = new HashMap<>();
             for (int i = 0; i < parameters.length; i++) {
-                paramIndexToNameMap.put(i, parameters[i].getName());
-            }
+                Parameter param = parameters[i];
+                Class<?> paramType = parameterTypes[i];
+                String paramName = param.getName();
 
-            Enumeration<String> parameterNames = req.getParameterNames();
-            while (parameterNames.hasMoreElements()) {
-                String paramName = parameterNames.nextElement();
+                if (paramType == MySession.class) {
+                    HttpSession session = req.getSession();
+                    args[i] = new MySession(session);
+                    continue;
+                }
+
+                if (param.isAnnotationPresent(RequestObject.class)) {
+                    String prefix = param.getAnnotation(RequestObject.class).value();
+                    args[i] = populateObjectFromRequest(paramType, req, prefix);
+                    continue;
+                }
+
                 String paramValue = req.getParameter(paramName);
-                boolean paramResolved = false;
-
-                // Vérifier d'abord par le nom de la variable de méthode
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    if (paramName.equals(paramIndexToNameMap.get(i))) {
-                        args[i] = convertParameterValue(paramValue, parameterTypes[i]);
-                        paramResolved = true;
-                        continue;
-                    }
-                }
-
-                // Si le paramètre n'est pas résolu via le nom de variable, vérifier les annotations
-                if (!paramResolved) {
-                    for (int i = 0; i < parameterAnnotations.length; i++) {
-                        Annotation[] annotations = parameterAnnotations[i];
-                        for (Annotation annotation : annotations) {
-                            if (annotation instanceof Param) {
-                                String annotationValue = ((Param) annotation).name();
-                                if (paramName.equals(annotationValue)) {
-                                    args[i] = convertParameterValue(paramValue, parameterTypes[i]);
-                                    paramResolved = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (paramResolved) {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Gérer les paramètres de type MySession
-            for (int i = 0; i < parameterTypes.length; i++) {
-                if (args[i] == null) {
-                    if (parameters[i].getType().equals(MySession.class)) {
-                        HttpSession session = req.getSession();
-                        args[i] = new MySession(session);
-                    } else if (parameters[i].isAnnotationPresent(RequestObject.class)) {
-                        RequestObject requestObjectAnnotation = parameters[i].getAnnotation(RequestObject.class);
-                        String prefix = requestObjectAnnotation.value();
-                        args[i] = populateObjectFromRequest(parameterTypes[i], req, prefix);
-                    } else if (req.getParameter(parameters[i].getName()) != null) {
-                        args[i] = convertParameterValue(req.getParameter(parameters[i].getName()), parameterTypes[i]);
-                    }
-                }
-
-            // Vérifier s'il y a des arguments non résolus et non annotés
-            for (int i = 0; i < args.length; i++) {
-                if (args[i] == null &&
-                        !parameters[i].isAnnotationPresent(Param.class) &&
-                        !parameters[i].isAnnotationPresent(RequestObject.class)) {
-                    throw new Exception("ETU2456: Parameter " + parameters[i].getName() +
-                            " in method " + method.getName() +
-                            " of class " + className +
-                            " is not annotated by @Param or @RequestObject");
-                }
+                args[i] = convertParameterValue(paramValue, paramType);
             }
 
             Object instance = clazz.getDeclaredConstructor().newInstance();
             result = method.invoke(instance, args);
-
         } catch (Exception e) {
             e.printStackTrace();
-            e.getCause();
             throw new IOException(e);
         }
 
@@ -302,15 +222,9 @@ public class FrontController extends HttpServlet {
         out.println("<title>Error</title>");
         out.println("</head>");
         out.println("<body>");
-        out.println("<h1>Error "+ resp.getStatus() +" : " + e.getMessage() + "</h1>");
+        out.println("<h1>Error: " + e.getMessage() + "</h1>");
         for (StackTraceElement ste : e.getStackTrace()) {
-            String stackTraceLine = ste.toString();
-            if (!stackTraceLine.contains("org.apache.catalina") &&
-                    !stackTraceLine.contains("org.apache.coyote") &&
-                    !stackTraceLine.contains("org.apache.tomcat") &&
-                    !stackTraceLine.contains("java.base/java.lang.Thread")) {
-                out.println("<p>" + ste + "</p>");
-            }
+            out.println("<p>" + ste + "</p>");
         }
         out.println("</body>");
         out.println("</html>");
@@ -318,13 +232,13 @@ public class FrontController extends HttpServlet {
 
     public Method getMethodByName(Class<?> clazz, String methodName, Class<?>[] paramTypes) {
         try {
-            return clazz.getMethod(methodName, paramTypes); 
+            return clazz.getMethod(methodName, paramTypes);
         } catch (NoSuchMethodException ex) {
             ex.printStackTrace();
             return null;
         }
     }
-    
+
     private Object convertParameterValue(String paramValue, Class<?> parameterType) {
         if (parameterType == String.class) {
             return paramValue;
@@ -334,10 +248,8 @@ public class FrontController extends HttpServlet {
             return Double.parseDouble(paramValue);
         } else if (parameterType == boolean.class || parameterType == Boolean.class) {
             return Boolean.parseBoolean(paramValue);
-        } else {
-            // Gérer d'autres types de paramètres selon les besoins
-            return paramValue;
         }
+        return paramValue;
     }
 
     private Object populateObjectFromRequest(Class<?> objectType, HttpServletRequest req, String prefix)
@@ -348,16 +260,11 @@ public class FrontController extends HttpServlet {
         for (Field field : fields) {
             field.setAccessible(true);
             String paramName = (prefix.isEmpty() ? "" : prefix + ".") + field.getName();
-            if (field.isAnnotationPresent(RequestField.class)) {
-                RequestField requestField = field.getAnnotation(RequestField.class);
-                paramName = prefix + "." + requestField.value();
-            }
             String paramValue = req.getParameter(paramName);
             if (paramValue != null) {
                 field.set(obj, convertParameterValue(paramValue, field.getType()));
             }
         }
-
         return obj;
     }
 

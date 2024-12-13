@@ -274,7 +274,7 @@ public class FrontController extends HttpServlet {
                 if (args[i] == null &&
                         !parameters[i].isAnnotationPresent(Param.class) &&
                         !parameters[i].isAnnotationPresent(RequestObject.class)) {
-                    throw new Exception("ETU2456: Parameter " + parameters[i].getName() +
+                    throw new Exception(" Parameter " + parameters[i].getName() +
                             " in method " + method.getName() +
                             " of class " + className +
                             " is not annotated by @Param or @RequestObject");
